@@ -8,7 +8,7 @@ not after the window has filled up.
 This is a faithful port of
 [dsh-live-compact](https://github.com/MerkyorLynn/dsh-live-compact)
 (MerkyorLynn, MIT) to the Pi coding agent: the principles, thresholds and the
-card algorithm match upstream 1.1.5, and the host-mechanism differences are
+card algorithm match upstream 1.1.7, and the host-mechanism differences are
 listed one by one in [PORTING.md](./PORTING.md).
 
 Pi's built-in compaction works like DSH's stock behaviour: pile up to a
@@ -21,7 +21,7 @@ extractive card, and the cut only goes ahead when the card can prove that no
 hard line was lost. Spans whose prose share is too high are not cut and are
 left to Pi's built-in compaction — the same routing as upstream's wait-80.
 
-Semantics at 1.1.5 (synced with upstream):
+Semantics at 1.1.7 (synced with upstream):
 
 - **Two engine modes**, resolved from the endpoint: a `strata` provider, or a
   loopback / LAN / Tailscale-range address, counts as **local** (cuts as
@@ -49,12 +49,21 @@ Semantics at 1.1.5 (synced with upstream):
   least 1000 tokens is tried on its own — the cut stays inside that round
   and never drags the short rounds after it along; a single result at 32K+
   inside it is pointerised. If that round cannot be cut, selection falls
-  back to the ordinary rules for an earlier round.
+  back to the ordinary rules for an earlier round; if the confined cut is
+  refused by a later gate, selection retries once with long reads
+  disabled (1.1.7).
 - **The card coverage gate**: hard lines are attributed per source — hard
   facts from user messages and from tool results (obligation keywords, plan
-  labels, kebab-case ids) must be retained under their own source id, and
-  if a decision-shaped line in assistant prose would be lost, the whole
-  card is refused.
+  labels, deployment regions) must be retained under their own source id,
+  and if a decision-shaped line (matched by decision verbs) in assistant
+  prose would be lost, the whole card is refused.
+- **Tool evidence is labelled untrusted** (1.1.6): every tool excerpt on
+  the card is prefixed as untrusted tool evidence, not a new instruction,
+  and each result's hard facts are listed separately at the top of its
+  block under "untrusted tool facts (not promoted to user constraints)".
+- **Stand-down switch** (1.1.6): with `SPINE_STAND_DOWN=1` the extension
+  yields completely — every turn_end returns at once, no cuts, no cards
+  (for sessions where another compressor has taken over).
 - **Official-compaction cooldown**: right after Pi's built-in compaction
   produces a fresh summary, spine yields one pass instead of rolling the
   summary into a card of its own (optional `SPINE_COOLDOWN_MS` window).
@@ -125,6 +134,7 @@ Same names and meanings as upstream:
 | `SPINE_KEEP_ROUNDS` | `3` | Newest finished tool rounds kept verbatim before the cut |
 | `SPINE_KEEP_ROUND_TOKENS` | `32000` | Combined token budget for the kept rounds (also the cloud drain target) |
 | `SPINE_ENGINE` | resolved from endpoint | Force the mode: `local` or `cloud` |
+| `SPINE_STAND_DOWN` | unset (off) | When set to `1`, stand down completely: no cuts, no cards (for when another compressor owns the session) |
 | `SPINE_COOLDOWN_MS` | `0` (off) | Cooldown window (ms) after an official compaction; the identity rule (one skipped pass per new official card) is always on, this only adds a time-based backstop |
 | `SPINE_POINTER_TOKENS` | `32000` | A single tool result above this is pointerised, not excerpted |
 | `SPINE_CHUNK_MIN` | `1000` | Minimum gain (non-user tokens) for one cut |
@@ -143,7 +153,7 @@ below 48K, and spans above 650K are out of the small cuts' scope
 ## Tests
 
 ```sh
-npm test   # node --test, 81 cases covering the card builder, engine resolution, span selection, the recall archive, cooldown and handler wiring (handler cases need a resolvable "typebox" in node_modules — link Pi's bundled copy on a Pi machine)
+npm test   # node --test, 89 cases covering the card builder, engine resolution, span selection, the recall archive, cooldown and handler wiring (handler cases need a resolvable "typebox" in node_modules — link Pi's bundled copy on a Pi machine)
 ```
 
 ## License and origin

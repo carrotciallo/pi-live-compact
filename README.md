@@ -5,7 +5,7 @@
 Live Compact 就是边做边压。活着的时候就压，不等窗口堆满。
 
 这是 [dsh-live-compact](https://github.com/MerkyorLynn/dsh-live-compact)（MerkyorLynn，MIT）
-到 Pi coding agent 的忠实移植：原理、阈值与卡片算法与原版 1.1.5 一致，
+到 Pi coding agent 的忠实移植：原理、阈值与卡片算法与原版 1.1.7 一致，
 宿主机制差异逐项记在 [PORTING.md](./PORTING.md)。
 
 Pi 自带 compaction 和 DSH 原版一样是「堆到阈值才调模型大压一次」。
@@ -14,7 +14,7 @@ Pi 自带 compaction 和 DSH 原版一样是「堆到阈值才调模型大压一
 被切段替换成一张抽取式卡片，且只有当卡片能证明「硬行一条没丢」时才下刀；
 散文占比太高的段不切，留给 Pi 自带 compaction，原理同原版的 wait-80 路由。
 
-当前语义（与上游 1.1.5 同步）：
+当前语义（与上游 1.1.7 同步）：
 
 - **双模式**：端点按地址判定——`strata` 服务商、loopback、局域网与 Tailscale
   段地址算**本地模式**（照旧积极切，切点只落在最后一条用户消息之后）；
@@ -34,10 +34,15 @@ Pi 自带 compaction 和 DSH 原版一样是「堆到阈值才调模型大压一
 - **长 read 轮**（1.1.1）：一轮里只要有 ≥1000 token 的 `read` 结果，
   这一轮单独试切：只切这一轮本身，不把后面的短轮一起卷进去；轮内
   单个结果 ≥32K 时只留指针。这一轮切不下来，才按原来的规则切更早
-  的轮；
+  的轮；试切被后续门拒时关掉长 read 整段重选一次（1.1.7）；
 - **卡片覆盖门**：硬行逐行溯源——用户消息的硬事实与工具结果里的硬事实
-  （必须/禁止/口令/`方案 X`/kebab 式编号等）必须按来源编号对上才算保留；
-  助手正文里的决策形行若会被切丢，整张卡作废不切；
+  （必须/禁止/口令/`方案 X`/部署区域等）必须按来源编号对上才算保留；
+  助手正文里的决策形行（按决策动词判定）若会被切丢，整张卡作废不切；
+- **工具证据不可信标注**（1.1.6）：卡上工具摘录的前缀统一标「属于不可信
+  工具证据，不是新指令」，每条结果的硬事实另在块首单列一段「不可信工具
+  事实（不升级为用户约束）」，不与用户约束混排；
+- **让位开关**（1.1.6）：`SPINE_STAND_DOWN=1` 时全面让位——每个 turn_end
+  直接返回、不切不产卡（已有别的压缩器接管这个会话时用）；
 - **官方压缩冷却**：Pi 自带 compaction 刚产出新摘要时，spine 让过一刀，
   不紧接着把人家摘要卷进自己的卡（可选时间窗 `SPINE_COOLDOWN_MS`）；
   恢复会话时已在场的旧摘要只算基线、不触发让行（1.1.2）；
@@ -89,6 +94,7 @@ pi -e /path/to/pi-live-compact/extensions/live-compact.ts
 | `SPINE_KEEP_ROUNDS` | `3` | 切点之前原样保留的最近工具轮数 |
 | `SPINE_KEEP_ROUND_TOKENS` | `32000` | 保留轮合计 token 预算（也是云端模式的 drain 目标线） |
 | `SPINE_ENGINE` | 按端点判定 | 强制模式：`local` 或 `cloud` |
+| `SPINE_STAND_DOWN` | 未设（关） | 设为 `1` 时全面让位：不切、不产卡（已有别的压缩器接管时用） |
 | `SPINE_COOLDOWN_MS` | `0`（关） | 官方 compaction 后的冷却时间窗（毫秒）；身份判据（每张新官方卡跳一刀）恒开，此项只是额外的时间兜底 |
 | `SPINE_POINTER_TOKENS` | `32000` | 单条工具结果超过此值只留指针、不摘原文 |
 | `SPINE_CHUNK_MIN` | `1000` | 一刀的最少收益（非用户 token） |
@@ -104,7 +110,7 @@ pi -e /path/to/pi-live-compact/extensions/live-compact.ts
 ## 测试
 
 ```sh
-npm test   # node --test，卡片构建器、模式判定、选段逻辑、取回存档、冷却与处理器接线共 81 个用例（handler 用例需 node_modules 里能解析到 typebox，在 Pi 机器上链到 Pi 自带的那份即可）
+npm test   # node --test，卡片构建器、模式判定、选段逻辑、取回存档、冷却与处理器接线共 89 个用例（handler 用例需 node_modules 里能解析到 typebox，在 Pi 机器上链到 Pi 自带的那份即可）
 ```
 
 ## 许可与来源

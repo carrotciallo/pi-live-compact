@@ -1,4 +1,4 @@
-// Live Compact for Pi — a faithful port of dsh-live-compact 1.1.5
+// Live Compact for Pi — a faithful port of dsh-live-compact 1.1.7
 // (MIT, MerkyorLynn) to Pi's extension boundary API.
 //
 // The DSH original hooks its host's compaction engine on agent idle and
@@ -30,7 +30,15 @@
 // fit are kept verbatim, and a span whose failed diagnostics cannot
 // all be retained is not cut at all; identified failures are never
 // pointerised. The kept-rounds reservation now restarts after the
-// newest card (1.1.5, issue #36, PORTING.md #31).
+// newest card (1.1.5, issue #36, PORTING.md #31). 1.1.6/1.1.7 add the
+// stand-down switch (SPINE_STAND_DOWN=1 yields every pass, PORTING.md
+// #32), mark tool evidence on the card as untrusted with its protected
+// facts listed separately, reshape the protected-fact and
+// assistant-decision shapes (region facts in, bare kebab ids out),
+// prefer model-level provider URLs (issue #45), narrow card recognition
+// to marker-at-text-start on message entries, recount kept tokens over
+// the rounds right of the actual cut, and fall back to an ordinary
+// selection when a long-read cut fails a later gate.
 //
 // No model is called for the cuts themselves, exactly like the original's
 // spine cuts. When the card gate refuses (prose-heavy span), nothing is cut
@@ -122,6 +130,8 @@ function toSpanEntries(projected: any[]): SpanEntry[] {
 // Engine identity from the session's model: provider name and base URL,
 // with the registry as the lookup table, mirroring the host wiring in
 // upstream index.js (requestHeader / requestContext / listProviders).
+// Registry rows are grouped per provider, each carrying its models, so
+// a model-level URL wins over the provider-level one (1.1.6, #45).
 function engineFor(ctx: any): { engine: string; source: string } {
   let provider = "";
   let baseURL = "";
@@ -129,18 +139,36 @@ function engineFor(ctx: any): { engine: string; source: string } {
     provider = typeof ctx?.model?.provider === "string" ? ctx.model.provider : "";
     baseURL = typeof ctx?.model?.baseUrl === "string" ? ctx.model.baseUrl : "";
     if (!baseURL && provider) {
-      const listed = (ctx?.modelRegistry?.getAll?.() || []).map((model: any) => ({
-        provider: typeof model?.provider === "string" ? model.provider : "",
-        id: typeof model?.provider === "string" ? model.provider : "",
-        baseURL: typeof model?.baseUrl === "string" ? model.baseUrl : "",
-      }));
-      baseURL = lookupProviderURL(provider, listed);
+      const byProvider = new Map<string, { provider: string; id: string; baseURL: string; models: { id: string; baseURL: string }[] }>();
+      for (const model of ctx?.modelRegistry?.getAll?.() || []) {
+        const name = typeof model?.provider === "string" ? model.provider : "";
+        if (!name) continue;
+        let row = byProvider.get(name);
+        if (!row) {
+          row = { provider: name, id: name, baseURL: "", models: [] };
+          byProvider.set(name, row);
+        }
+        const url = typeof model?.baseUrl === "string" ? model.baseUrl : "";
+        if (!row.baseURL && url) row.baseURL = url;
+        if (typeof model?.id === "string" && url) row.models.push({ id: model.id, baseURL: url });
+      }
+      const modelId = typeof ctx?.model?.id === "string" ? ctx.model.id : "";
+      baseURL = lookupProviderURL(provider, [...byProvider.values()], modelId);
     }
   } catch {
     // Resolution must never break a turn; fall through to the fallback.
   }
   if (!baseURL) baseURL = fallbackProviderURL(provider);
   return resolveEngine({ provider, baseURL, env: process.env });
+}
+
+// Stand-down (1.1.6): SPINE_STAND_DOWN=1 means another compressor owns
+// compaction for this session — never cut. Upstream also auto-detects
+// active peers in the host's plugin registry; Pi exposes no registry of
+// other extensions, so the env is the only signal (PORTING.md #32).
+// Read per turn, matching upstream's per-call check.
+function standDownActive(): boolean {
+  return process.env.SPINE_STAND_DOWN === "1";
 }
 
 export default function liveCompact(pi: any) {
@@ -188,6 +216,7 @@ export default function liveCompact(pi: any) {
   });
 
   pi.on("turn_end", async (event: any, ctx: any) => {
+    if (standDownActive()) return;
     bindStore(ctx);
     const usage = ctx.getContextUsage?.();
     const projected = event.context?.contextEntries ?? [];

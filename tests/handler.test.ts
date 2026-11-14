@@ -86,3 +86,17 @@ test("a restored official compaction never yields; a live one yields exactly onc
   const resumed = await turnEnd(projected("comp-2"), ctx);
   assert.ok(resumed?.entries?.length > 0);
 });
+
+test("SPINE_STAND_DOWN=1 makes every pass yield until cleared (1.1.6)", async (t) => {
+  if (!liveCompact) return t.skip("typebox not resolvable outside Pi");
+  process.env.SPINE_STAND_DOWN = "1";
+  try {
+    const { turnEnd, ctx } = makeExtension();
+    assert.equal(await turnEnd(projected(null), ctx), undefined);
+  } finally {
+    delete process.env.SPINE_STAND_DOWN;
+  }
+  const { turnEnd, ctx } = makeExtension();
+  const resumed = await turnEnd(projected(null), ctx);
+  assert.ok(resumed?.entries?.length > 0);
+});

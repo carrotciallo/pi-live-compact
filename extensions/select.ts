@@ -21,6 +21,13 @@
 // a pointer cut never replaces a failed tool result (#33) — a span whose
 // card cannot retain the complete failure diagnostics is not cut at all
 // (the veto itself lives in plan.ts buildCard/toolExcerpt).
+// 1.1.6/1.1.7: the legacy card marker only counts at the start of a
+// message entry's text (a tool result merely mentioning it is no
+// boundary); keptTokens is recounted over the retained rounds to the
+// right of the actual cut; and a long-read cut that fails a later gate
+// falls back to an ordinary selection with long reads disabled instead
+// of returning nothing (issue #54 contests that fallback upstream; it is
+// ported as released).
 
 import {
   buildCard,
@@ -91,8 +98,16 @@ export interface Chunk {
   pointerOnly?: boolean;
 }
 
+// 1.1.6: the legacy marker is only meaningful on a message entry and only
+// at the beginning of its text. A tool result or an ordinary sentence
+// that merely mentions the marker must not create a permanent cut
+// boundary. (Upstream restricts this to user/message events; a Pi card
+// keeps the role of the entry it replaced, so any non-toolResult message
+// role counts here — PORTING.md #33.)
 export function isCardEntry(entry: SpanEntry): boolean {
-  return entry.text.includes(MARK);
+  if (entry.role === "toolResult") return false;
+  const text = entry.text.trimStart();
+  return text === MARK || text.startsWith(`${MARK}\n`) || text.startsWith(`${MARK}\r\n`);
 }
 
 // Checkpoints stop span expansion and tail walks: our own cards, plus
@@ -199,9 +214,7 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
   }, KEEP_ROUND_TOKENS);
   const cutEnd = span ? reservedCutEnd(visible[span.start].index, first) : null;
   if (span && cutEnd === null) return null;
-  let keptTokens = 0;
   if (cutEnd !== null && span) {
-    for (let index = visible[span.start].index; index <= visible[span.end].index; index += 1) keptTokens += entries[index].tokens;
     end = cutEnd;
     while (end >= first && entries[end].role === "user" && !(floorCard >= 0 && end - 1 <= floorCard)) end -= 1;
     if (floorCard >= 0 && end <= floorCard) return null;
@@ -241,21 +254,6 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
     drain: opts.drain,
     urgentTokens: URGENT_TOKENS,
   };
-  let usedLongCut = false;
-  let picked: CutPick | null = null;
-  if (longSpan) {
-    const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
-    if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
-      picked = longPicked;
-      usedLongCut = true;
-    }
-  }
-  if (!picked) {
-    if (end < first || isCheckpointEntry(entries[end])) return null;
-    picked = selectCutIndexes(items, cutOptions);
-  }
-  if (!picked) return null;
-
   const callSeqOf = new Map<string, number>();
   for (const entry of entries) {
     for (const callId of entry.toolCalls) {
@@ -276,74 +274,116 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
     for (let i = at + 1; i < entries.length; i += 1) after += entries[i].tokens;
     return after;
   };
-
-  if (picked.pointerOnly) {
-    const resultAt = picked.end;
-    // 1.1.5 (#33): an identified failed result never goes pointer-only;
-    // its diagnostics must go through the card gate instead.
-    if (isToolFailure(entries[resultAt].text, entries[resultAt].isError)) return null;
-    const callId = entries[resultAt].toolResultFor;
-    if (!callId) return null;
-    const pairStart = entries.findIndex((entry) => entry.toolCalls.includes(callId));
-    if (pairStart < 0 || pairStart > resultAt) return null;
-    if (usedLongCut && longSpan && pairStart < longSpan.start) return null;
-    if (!pointerSpanAllowed(items, pairStart, resultAt, engine)) return null;
-    if (items[pairStart].balancedBefore === false) return null;
-    // Port-side guard (PORTING.md): replacing the call entry also drops any
-    // sibling call in it; a sibling whose result lands outside the span
-    // would be orphaned, so refuse the cut in that case.
-    const resultIndex = new Map<string, number>();
-    entries.forEach((entry, i) => {
-      if (entry.toolResultFor) resultIndex.set(entry.toolResultFor, i);
-    });
-    for (const sibling of entries[pairStart].toolCalls) {
-      if (sibling === callId) continue;
-      const at = resultIndex.get(sibling);
-      if (at === undefined || at > resultAt) return null;
+  // 1.1.7: keptTokens must describe retained rounds to the right of the
+  // actual cut. A long-read cut can be newer than the rounds the
+  // reservation selected; counting those older rounds made
+  // tailBeyondKept negative in the caller and disabled the tail guard.
+  const keptTokensAfter = (cutEndIndex: number): number => {
+    let total = 0;
+    for (const round of rounds) {
+      const roundStart = visible[round.start]?.index;
+      const roundEnd = visible[round.end]?.index;
+      if (!Number.isInteger(roundStart) || !Number.isInteger(roundEnd) || (roundStart as number) <= cutEndIndex) continue;
+      for (let index = roundStart as number; index <= (roundEnd as number); index += 1) total += entries[index].tokens;
     }
-    const text = `${MARK}\n${pointerOnlyText(spanObjs(pairStart, resultAt))}`;
-    const card: Card = {
-      ok: true,
-      failureDiagnosticsComplete: true,
-      verdict: "ok",
-      scope: TRUNK_SCOPE,
-      hardLines: [],
-      hardCount: 0,
-      omittedHard: 0,
-      deferred: 0,
-      missing: [],
-      omittedOrdinaryToolLines: 0,
-      uncovered: "",
-      keptChars: text.length,
-      needsBackup: false,
-      rawPaths: [],
-      text,
-    };
-    return {
-      start: pairStart,
-      end: resultAt,
-      tokens: sumTokens(pairStart, resultAt),
-      after: afterOf(resultAt),
-      keptTokens,
-      card,
-      pointerOnly: true,
-    };
-  }
-
-  if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;
-
-  const start = picked.start;
-  const finalEnd = picked.end;
-  if (isCheckpointEntry(entries[start])) return null;
-  const card = buildCard(spanText(start, finalEnd), liveText(start, finalEnd), spanObjs(start, finalEnd));
-  if (!card.ok) return null;
-  if (!balancedAfter(entries, start, finalEnd)) return null;
-  return {
-    start,
-    end: finalEnd,
-    tokens: sumTokens(start, finalEnd),
-    after: afterOf(finalEnd),
-    keptTokens,
-    card,
+    return total;
   };
+
+  const attempt = (disableLongRead: boolean): Chunk | null => {
+    const longSpan =
+      !disableLongRead && newestLong && visible[newestLong.start].index > floorCard
+        ? { start: visible[newestLong.start].index, end: visible[newestLong.end].index }
+        : null;
+    if (!longSpan && (maxEnd < first || isCheckpointEntry(entries[maxEnd]))) return null;
+    let usedLongCut = false;
+    let picked: CutPick | null = null;
+    if (longSpan) {
+      const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
+      if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
+        picked = longPicked;
+        usedLongCut = true;
+      }
+    }
+    if (!picked) {
+      if (maxEnd < first || isCheckpointEntry(entries[maxEnd])) return null;
+      picked = selectCutIndexes(items, cutOptions);
+    }
+    if (!picked) return null;
+    // 1.1.7: a long-read cut that fails a later gate retries the whole
+    // selection with long reads disabled instead of returning nothing.
+    const fallback = (): Chunk | null => (usedLongCut ? attempt(true) : null);
+
+    if (picked.pointerOnly) {
+      const resultAt = picked.end;
+      // 1.1.5 (#33): an identified failed result never goes pointer-only;
+      // its diagnostics must go through the card gate instead.
+      if (isToolFailure(entries[resultAt].text, entries[resultAt].isError)) return fallback();
+      const callId = entries[resultAt].toolResultFor;
+      if (!callId) return fallback();
+      const pairStart = entries.findIndex((entry) => entry.toolCalls.includes(callId));
+      if (pairStart < 0 || pairStart > resultAt) return fallback();
+      if (usedLongCut && longSpan && pairStart < longSpan.start) return fallback();
+      if (!pointerSpanAllowed(items, pairStart, resultAt, engine)) return fallback();
+      if (items[pairStart].balancedBefore === false) return fallback();
+      // Port-side guard (PORTING.md): replacing the call entry also drops any
+      // sibling call in it; a sibling whose result lands outside the span
+      // would be orphaned, so refuse the cut in that case.
+      const resultIndex = new Map<string, number>();
+      entries.forEach((entry, i) => {
+        if (entry.toolResultFor) resultIndex.set(entry.toolResultFor, i);
+      });
+      for (const sibling of entries[pairStart].toolCalls) {
+        if (sibling === callId) continue;
+        const at = resultIndex.get(sibling);
+        if (at === undefined || at > resultAt) return fallback();
+      }
+      const text = `${MARK}\n${pointerOnlyText(spanObjs(pairStart, resultAt))}`;
+      const card: Card = {
+        ok: true,
+        failureDiagnosticsComplete: true,
+        verdict: "ok",
+        scope: TRUNK_SCOPE,
+        hardLines: [],
+        hardFacts: [],
+        missingFacts: [],
+        hardCount: 0,
+        omittedHard: 0,
+        deferred: 0,
+        missing: [],
+        omittedOrdinaryToolLines: 0,
+        uncovered: "",
+        keptChars: text.length,
+        needsBackup: false,
+        rawPaths: [],
+        text,
+      };
+      return {
+        start: pairStart,
+        end: resultAt,
+        tokens: sumTokens(pairStart, resultAt),
+        after: afterOf(resultAt),
+        keptTokens: keptTokensAfter(resultAt),
+        card,
+        pointerOnly: true,
+      };
+    }
+
+    if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallback();
+
+    const start = picked.start;
+    const finalEnd = picked.end;
+    if (isCheckpointEntry(entries[start])) return null;
+    const card = buildCard(spanText(start, finalEnd), liveText(start, finalEnd), spanObjs(start, finalEnd));
+    if (!card.ok) return fallback();
+    if (!balancedAfter(entries, start, finalEnd)) return null;
+    return {
+      start,
+      end: finalEnd,
+      tokens: sumTokens(start, finalEnd),
+      after: afterOf(finalEnd),
+      keptTokens: keptTokensAfter(finalEnd),
+      card,
+    };
+  };
+  return attempt(false);
 }
