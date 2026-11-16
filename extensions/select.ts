@@ -28,6 +28,16 @@
 // falls back to an ordinary selection with long reads disabled instead
 // of returning nothing (issue #54 contests that fallback upstream; it is
 // ported as released).
+// 1.1.8: when the newest cloud phase is too small, selection retreats
+// before the latest user and tries an older span (plan.ts); Pi marks
+// every user entry untrusted, so that fallback never includes a user
+// entry (PORTING.md #38, mapping A). 1.1.9: a long-read candidate no
+// longer wins unconditionally — the ordinary candidate is computed too
+// and the larger token span wins; after a non-pointer pick the start
+// grows left again (low-water expansion) until the chunk rail, a
+// checkpoint, a genuine user entry, an unbalanced tool pair, or a
+// trial card rejection stops it. 1.1.11: an ordinary pick whose card
+// is rejected retries once with the long-read candidate forced (#60).
 
 import {
   buildCard,
@@ -240,6 +250,10 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
   const items: CutItem[] = entries.map((entry, index) => ({
     type: itemType(entry),
     tokens: entry.tokens,
+    // 1.1.8 classification, Pi mapping (PORTING.md #38): Pi has no
+    // validated plugin-notice producer, so every user entry is an
+    // untrusted genuine boundary for the cloud fallback.
+    untrustedNotice: entry.role === "user",
     checkpoint: isCheckpointEntry(entry),
     balancedBefore: balancedBefore(entries, index),
     balancedAfter: balancedAfter(entries, first, index),
@@ -289,24 +303,42 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
     return total;
   };
 
-  const attempt = (disableLongRead: boolean): Chunk | null => {
+  const attempt = (disableLongRead: boolean, forceLongRead = false): Chunk | null => {
     const longSpan =
       !disableLongRead && newestLong && visible[newestLong.start].index > floorCard
         ? { start: visible[newestLong.start].index, end: visible[newestLong.end].index }
         : null;
     if (!longSpan && (maxEnd < first || isCheckpointEntry(entries[maxEnd]))) return null;
     let usedLongCut = false;
-    let picked: CutPick | null = null;
+    // 1.1.9: the long-read candidate competes with the ordinary one;
+    // the larger token span wins (a tie goes to the ordinary pick).
+    let longPicked: CutPick | null = null;
     if (longSpan) {
-      const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
-      if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
+      const candidate = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
+      if (candidate && candidate.start >= longSpan.start && candidate.end <= longSpan.end) {
+        longPicked = candidate;
+      }
+    }
+    let ordinaryPicked: CutPick | null = null;
+    if (maxEnd >= first && !isCheckpointEntry(entries[maxEnd])) {
+      ordinaryPicked = selectCutIndexes(items, cutOptions);
+    }
+    let picked: CutPick | null = null;
+    if (forceLongRead && longPicked) {
+      picked = longPicked;
+      usedLongCut = true;
+    } else if (longPicked && ordinaryPicked) {
+      if ((ordinaryPicked.tokens || 0) >= (longPicked.tokens || 0)) {
+        picked = ordinaryPicked;
+      } else {
         picked = longPicked;
         usedLongCut = true;
       }
-    }
-    if (!picked) {
-      if (maxEnd < first || isCheckpointEntry(entries[maxEnd])) return null;
-      picked = selectCutIndexes(items, cutOptions);
+    } else if (ordinaryPicked) {
+      picked = ordinaryPicked;
+    } else if (longPicked) {
+      picked = longPicked;
+      usedLongCut = true;
     }
     if (!picked) return null;
     // 1.1.7: a long-read cut that fails a later gate retries the whole
@@ -370,11 +402,41 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
 
     if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallback();
 
-    const start = picked.start;
+    let start = picked.start;
     const finalEnd = picked.end;
     if (isCheckpointEntry(entries[start])) return null;
+    // 1.1.9 low-water expansion (restores the 1.0.6 rule): grow the
+    // start left until the chunk rail, a checkpoint, a genuine user
+    // entry, the long-read span's own start, or a trial card rejection
+    // stops it; then shift right until the tool pairing balances.
+    let expandedTokens = sumTokens(start, finalEnd);
+    while (start > first) {
+      const previous = start - 1;
+      if (isCheckpointEntry(entries[previous])) break;
+      if (entries[previous].role === "user") break;
+      if (usedLongCut && longSpan && previous < longSpan.start) break;
+      const nextTokens = expandedTokens + entries[previous].tokens;
+      if (nextTokens > CHUNK_MAX) break;
+      const trial = buildCard(spanText(previous, finalEnd), liveText(previous, finalEnd), spanObjs(previous, finalEnd));
+      if (!trial.ok) break;
+      start = previous;
+      expandedTokens = nextTokens;
+    }
+    while (start <= finalEnd && !balancedBefore(entries, start)) {
+      expandedTokens -= entries[start].tokens;
+      start += 1;
+    }
+    if (start > finalEnd) return fallback();
+    if (isCheckpointEntry(entries[start])) return null;
     const card = buildCard(spanText(start, finalEnd), liveText(start, finalEnd), spanObjs(start, finalEnd));
-    if (!card.ok) return fallback();
+    if (!card.ok) {
+      // 1.1.11 (#60): the ordinary candidate is chosen by token gain
+      // before card validation; if its card is rejected, give the
+      // already selected long-read candidate a complete second pass
+      // before abandoning the turn.
+      if (!usedLongCut && longPicked && !forceLongRead) return attempt(false, true);
+      return fallback();
+    }
     if (!balancedAfter(entries, start, finalEnd)) return null;
     return {
       start,

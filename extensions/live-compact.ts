@@ -1,4 +1,4 @@
-// Live Compact for Pi — a faithful port of dsh-live-compact 1.1.7
+// Live Compact for Pi — a faithful port of dsh-live-compact 1.1.11
 // (MIT, MerkyorLynn) to Pi's extension boundary API.
 //
 // The DSH original hooks its host's compaction engine on agent idle and
@@ -38,7 +38,13 @@
 // prefer model-level provider URLs (issue #45), narrow card recognition
 // to marker-at-text-start on message entries, recount kept tokens over
 // the rounds right of the actual cut, and fall back to an ordinary
-// selection when a long-read cut fails a later gate.
+// selection when a long-read cut fails a later gate. 1.1.8 adds the
+// cloud cross-task fallback (retreat before the latest user when the
+// newest phase is too small; in Pi it never includes a user entry,
+// PORTING.md #38). 1.1.9 restores low-water expansion and makes the
+// long-read candidate compete with the ordinary one by span size.
+// 1.1.11 retries a card-rejected ordinary pick with the long-read
+// candidate forced (#60) and emits hard tool facts only once (#61).
 //
 // No model is called for the cuts themselves, exactly like the original's
 // spine cuts. When the card gate refuses (prose-heavy span), nothing is cut

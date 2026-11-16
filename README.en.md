@@ -8,7 +8,7 @@ not after the window has filled up.
 This is a faithful port of
 [dsh-live-compact](https://github.com/MerkyorLynn/dsh-live-compact)
 (MerkyorLynn, MIT) to the Pi coding agent: the principles, thresholds and the
-card algorithm match upstream 1.1.7, and the host-mechanism differences are
+card algorithm match upstream 1.1.11, and the host-mechanism differences are
 listed one by one in [PORTING.md](./PORTING.md).
 
 Pi's built-in compaction works like DSH's stock behaviour: pile up to a
@@ -21,7 +21,7 @@ extractive card, and the cut only goes ahead when the card can prove that no
 hard line was lost. Spans whose prose share is too high are not cut and are
 left to Pi's built-in compaction — the same routing as upstream's wait-80.
 
-Semantics at 1.1.7 (synced with upstream):
+Semantics at 1.1.11 (synced with upstream):
 
 - **Two engine modes**, resolved from the endpoint: a `strata` provider, or a
   loopback / LAN / Tailscale-range address, counts as **local** (cuts as
@@ -52,6 +52,23 @@ Semantics at 1.1.7 (synced with upstream):
   back to the ordinary rules for an earlier round; if the confined cut is
   refused by a later gate, selection retries once with long reads
   disabled (1.1.7).
+- **Cloud cross-task fallback** (1.1.8): during a drain, when the newest
+  segment is too small (under 1000 tokens), selection no longer gives
+  up — it retreats before the latest user message and cuts an older
+  segment instead. In Pi every user message is a hard boundary, so the
+  fallback span is always an inter-user segment and never includes a
+  user message in the card.
+- **Long-read competition and low-water expansion** (1.1.9): the
+  long-read candidate no longer wins unconditionally — it is computed
+  alongside the ordinary candidate and the larger token span wins;
+  after the pick, the start grows left again up to the 32K rail, a
+  checkpoint, a user message, or an unbalanced tool pair, instead of
+  cutting only the smallest span that clears the minimum.
+- **Candidate fallback and hard-fact dedup** (1.1.11): when the winning
+  ordinary candidate's card is rejected, the long-read candidate gets
+  a complete second pass before the turn is abandoned (#60); hard tool
+  facts appear only once, in the block's prefix section, and no longer
+  count twice against the tool budget (#61).
 - **The card coverage gate**: hard lines are attributed per source — hard
   facts from user messages and from tool results (obligation keywords, plan
   labels, deployment regions) must be retained under their own source id,
@@ -153,7 +170,7 @@ below 48K, and spans above 650K are out of the small cuts' scope
 ## Tests
 
 ```sh
-npm test   # node --test, 89 cases covering the card builder, engine resolution, span selection, the recall archive, cooldown and handler wiring (handler cases need a resolvable "typebox" in node_modules — link Pi's bundled copy on a Pi machine)
+npm test   # node --test, 94 cases covering the card builder, engine resolution, span selection, the recall archive, cooldown and handler wiring (handler cases need a resolvable "typebox" in node_modules — link Pi's bundled copy on a Pi machine)
 ```
 
 ## License and origin

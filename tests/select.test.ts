@@ -327,3 +327,42 @@ test("a failed long-read pointer falls back to an ordinary selection (1.1.7)", (
   assert.equal(entries[chunk.start].id, "a1");
   assert.equal(entries[chunk.end].id, "t1");
 });
+
+test("an ordinary candidate larger than the long-read candidate wins (1.1.9)", () => {
+  // Pre-1.1.9 the long-read candidate won unconditionally. Here the
+  // ordinary selection (rounds 10-11, 30200 tokens) outweighs the
+  // long-read round (5100), so the ordinary span is cut instead.
+  const entries = sequenced([
+    ...base(),
+    entry({ id: "ar", text: "calling", tokens: 100, toolCalls: ["cr"], call: null }),
+    entry({ id: "tr", role: "toolResult", text: CODE_TEXT, tokens: 5000, toolResultFor: "cr", call: { id: "cr", name: "read", command: "big.ts", filePath: "big.ts" } }),
+    ...rounds(4, 15000, 10),
+    entry({ id: "a9", text: "done", tokens: 50 }),
+  ]);
+  const chunk = selectNewestChunk(entries, { engine: "local" });
+  assert.ok(chunk);
+  assert.equal(chunk.pointerOnly, undefined);
+  assert.equal(entries[chunk.start].id, "a10");
+  assert.equal(entries[chunk.end].id, "t11");
+});
+
+test("a card-rejected ordinary pick retries with the long-read candidate forced (1.1.11, issue #60)", () => {
+  // The ordinary span outweighs the long-read round (see the previous
+  // test) but its card is vetoed: its first assistant entry is an
+  // unresolved decision line. Since 1.1.11 the long-read candidate
+  // gets a complete second pass instead of abandoning the turn.
+  const entries = sequenced([
+    ...base(),
+    entry({ id: "ar", text: "calling", tokens: 100, toolCalls: ["cr"], call: null }),
+    entry({ id: "tr", role: "toolResult", text: CODE_TEXT, tokens: 5000, toolResultFor: "cr", call: { id: "cr", name: "read", command: "big.ts", filePath: "big.ts" } }),
+    entry({ id: "a10", text: "决定采用 Postgres 存会话。", tokens: 100, toolCalls: ["c10"], call: null }),
+    entry({ id: "t10", role: "toolResult", text: CODE_TEXT, tokens: 15000, toolResultFor: "c10", call: { id: "c10", name: "bash", command: "npm test", filePath: "" } }),
+    ...rounds(3, 15000, 11),
+    entry({ id: "a9", text: "done", tokens: 50 }),
+  ]);
+  const chunk = selectNewestChunk(entries, { engine: "local" });
+  assert.ok(chunk);
+  assert.equal(chunk.pointerOnly, undefined);
+  assert.equal(entries[chunk.start].id, "ar");
+  assert.equal(entries[chunk.end].id, "tr");
+});

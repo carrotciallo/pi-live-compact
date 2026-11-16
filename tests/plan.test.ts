@@ -289,10 +289,18 @@ test("selectCutIndexes cloud: at the urgent line the newest segment is cut", () 
   assert.equal(pick.end, 6);
 });
 
-test("selectCutIndexes cloud drain does not reach across a user message for a pointer", () => {
+test("selectCutIndexes cloud drain fallback pointerises an oversized result in an older segment (1.1.8)", () => {
+  // Rewritten for 1.1.8 (was: "does not reach across a user message for
+  // a pointer", expecting null). The tail pointer scan still stops at
+  // the user, but the new cloud fallback then retreats before the
+  // latest user and pointerises the oversized result it lands on —
+  // upstream's fallback returns that pointer by design.
   const list = items([["user", 100], ["tool", 40000], ["user", 100], ["assistant", 100], ["tool", 500]]);
   const pick = selectCutIndexes(list, { engine: "cloud", totalTokens: 60000 });
-  assert.equal(pick, null);
+  assert.ok(pick);
+  assert.equal(pick.pointerOnly, true);
+  assert.equal(pick.start, 1);
+  assert.equal(pick.end, 1);
 });
 
 test("selectCutIndexes cloud drain cuts the newest turn segment", () => {
@@ -625,4 +633,66 @@ test("lookupProviderURL prefers a model-level catalog URL (1.1.6, issue #45)", (
   assert.equal(lookupProviderURL("acme", listed, "acme-pro"), "https://api.acme.example");
   assert.equal(lookupProviderURL("acme", listed), "https://api.acme.example");
   assert.equal(lookupProviderURL("other", listed, "acme-mini"), "");
+});
+
+test("cloud fallback follows upstream v107 at plan level for unclassified items (1.1.8)", () => {
+  // Upstream's plan-level tests construct items without host
+  // classification; expandBack's crossUser path may then include an
+  // older user, preserved as a JSON line in the card. Pi's production
+  // path never feeds unclassified items (see the next test).
+  const round = (tokens: number): CutItem => ({ type: "tool", tokens, checkpoint: false, balancedBefore: true, balancedAfter: true });
+  const usr = (tokens = 20): CutItem => ({ type: "user", tokens, checkpoint: false, balancedBefore: true, balancedAfter: true });
+  const onlyHeavy = selectCutIndexes(
+    [usr(), round(20000), usr(), round(300), round(100), round(100), round(100)],
+    { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 2 },
+  );
+  assert.ok(onlyHeavy);
+  assert.equal(onlyHeavy.start, 1);
+  assert.equal(onlyHeavy.end, 1);
+  const across = selectCutIndexes(
+    [usr(), round(20000), usr(), round(300), usr(), round(100), round(100), round(100)],
+    { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 4 },
+  );
+  assert.ok(across);
+  assert.equal(across.start, 1);
+  assert.equal(across.end, 3);
+  assert.equal(across.gain, 20300);
+  assert.equal(selectCutIndexes(
+    [usr(), round(1200), { type: "tool", tokens: 10, checkpoint: true, balancedBefore: true, balancedAfter: true }, usr(), round(100)],
+    { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 4 },
+  ), null);
+});
+
+test("cloud fallback never includes an untrusted user entry (1.1.8, PORTING #38 mapping A)", () => {
+  // Pi classification: every user entry is untrusted, so the fallback
+  // span is an inter-user segment and includes no user entry at all.
+  const round = (tokens: number): CutItem => ({ type: "tool", tokens, checkpoint: false, balancedBefore: true, balancedAfter: true });
+  const usr = (tokens = 20): CutItem => ({ type: "user", tokens, checkpoint: false, balancedBefore: true, balancedAfter: true, untrustedNotice: true });
+  // The across shape collapses: the segment after the middle user is
+  // only 300 tokens and the untrusted guard stops expansion there.
+  assert.equal(selectCutIndexes(
+    [usr(), round(20000), usr(), round(300), usr(), round(100), round(100), round(100)],
+    { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 4 },
+  ), null);
+  // Positive: the segment right before the latest user is big, and the
+  // fallback cuts exactly that segment (start == end == its tool entry).
+  const pick = selectCutIndexes(
+    [usr(), round(300), usr(), round(20000), usr(), round(100)],
+    { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 5 },
+  );
+  assert.ok(pick);
+  assert.equal(pick.start, 3);
+  assert.equal(pick.end, 3);
+  assert.equal(pick.pointerOnly, undefined);
+});
+
+test("tool block emits a hard fact once, in the prefix section only (1.1.11, issue #61)", () => {
+  const span: CardSpan = {
+    role: "toolResult",
+    text: "部署区域：eu-west-1\nplain output line",
+    toolCallId: "c61", seq: 5, callSeq: 4, turn: 1, command: "cat conf", name: "bash",
+  };
+  const excerpt = toolExcerpt([span]);
+  assert.equal(excerpt.text.split("部署区域：eu-west-1").length - 1, 1);
+  assert.ok(excerpt.text.includes("plain output line"));
 });
