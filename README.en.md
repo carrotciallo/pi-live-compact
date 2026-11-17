@@ -8,7 +8,7 @@ not after the window has filled up.
 This is a faithful port of
 [dsh-live-compact](https://github.com/MerkyorLynn/dsh-live-compact)
 (MerkyorLynn, MIT) to the Pi coding agent: the principles, thresholds and the
-card algorithm match upstream 1.1.11, and the host-mechanism differences are
+card algorithm match upstream 1.1.12, and the host-mechanism differences are
 listed one by one in [PORTING.md](./PORTING.md).
 
 Pi's built-in compaction works like DSH's stock behaviour: pile up to a
@@ -21,7 +21,7 @@ extractive card, and the cut only goes ahead when the card can prove that no
 hard line was lost. Spans whose prose share is too high are not cut and are
 left to Pi's built-in compaction — the same routing as upstream's wait-80.
 
-Semantics at 1.1.11 (synced with upstream):
+Semantics at 1.1.12 (synced with upstream):
 
 - **Two engine modes**, resolved from the endpoint: a `strata` provider, or a
   loopback / LAN / Tailscale-range address, counts as **local** (cuts as
@@ -64,9 +64,13 @@ Semantics at 1.1.11 (synced with upstream):
   after the pick, the start grows left again up to the 32K rail, a
   checkpoint, a user message, or an unbalanced tool pair, instead of
   cutting only the smallest span that clears the minimum.
-- **Candidate fallback and hard-fact dedup** (1.1.11): when the winning
-  ordinary candidate's card is rejected, the long-read candidate gets
-  a complete second pass before the turn is abandoned (#60); hard tool
+- **Candidate fallback and hard-fact dedup** (1.1.11, generalised in
+  1.1.12): when the winning ordinary candidate's card is rejected, the
+  long-read candidate gets a complete second pass before the turn is
+  abandoned (#60); since 1.1.12 both candidates are computed up front
+  and evaluated in place, and any rejection exit of the winner —
+  pointer, span bound, expansion, failure veto — falls through to the
+  other candidate. Hard tool
   facts appear only once, in the block's prefix section, and no longer
   count twice against the tool budget (#61).
 - **The card coverage gate**: hard lines are attributed per source — hard

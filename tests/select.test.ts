@@ -311,9 +311,11 @@ test("keptTokens counts only rounds right of a long-read cut (1.1.7)", () => {
 
 test("a failed long-read pointer falls back to an ordinary selection (1.1.7)", () => {
   // The oversized failed read result is pointerised by the long-read
-  // path, refused as a failure pointer, and — since 1.1.7 — the whole
-  // selection retries with long reads disabled and cuts the oldest
-  // ordinary round instead of returning nothing.
+  // path, refused as a failure pointer, and — since 1.1.7 — the
+  // selection falls back to an ordinary cut instead of returning
+  // nothing (up to 1.1.11 by rescanning with long reads disabled;
+  // since 1.1.12 by evaluating the already-computed ordinary
+  // candidate next).
   const entries = sequenced([
     ...base(),
     ...rounds(3, 15000, 1),
@@ -350,7 +352,9 @@ test("a card-rejected ordinary pick retries with the long-read candidate forced 
   // The ordinary span outweighs the long-read round (see the previous
   // test) but its card is vetoed: its first assistant entry is an
   // unresolved decision line. Since 1.1.11 the long-read candidate
-  // gets a complete second pass instead of abandoning the turn.
+  // gets a complete second pass instead of abandoning the turn;
+  // since 1.1.12 that fall-through applies to every rejection exit
+  // and evaluates the candidate in place, without rescanning.
   const entries = sequenced([
     ...base(),
     entry({ id: "ar", text: "calling", tokens: 100, toolCalls: ["cr"], call: null }),
@@ -358,6 +362,29 @@ test("a card-rejected ordinary pick retries with the long-read candidate forced 
     entry({ id: "a10", text: "决定采用 Postgres 存会话。", tokens: 100, toolCalls: ["c10"], call: null }),
     entry({ id: "t10", role: "toolResult", text: CODE_TEXT, tokens: 15000, toolResultFor: "c10", call: { id: "c10", name: "bash", command: "npm test", filePath: "" } }),
     ...rounds(3, 15000, 11),
+    entry({ id: "a9", text: "done", tokens: 50 }),
+  ]);
+  const chunk = selectNewestChunk(entries, { engine: "local" });
+  assert.ok(chunk);
+  assert.equal(chunk.pointerOnly, undefined);
+  assert.equal(entries[chunk.start].id, "ar");
+  assert.equal(entries[chunk.end].id, "tr");
+});
+
+test("a vetoed ordinary pointer falls back to the long-read candidate (1.1.12, issue #60)", () => {
+  // 1.1.12 generalises #60 beyond card vetoes: here the winning
+  // ordinary candidate is a pointer to an oversized FAILED result,
+  // vetoed inside the pointer branch itself. Up to 1.1.11 that exit
+  // returned null outright (the fallback only covered long-read
+  // failures and card vetoes); now the already-computed long-read
+  // candidate is evaluated and cut.
+  const entries = sequenced([
+    ...base(),
+    entry({ id: "ar", text: "calling", tokens: 100, toolCalls: ["cr"], call: null }),
+    entry({ id: "tr", role: "toolResult", text: CODE_TEXT, tokens: 5000, toolResultFor: "cr", call: { id: "cr", name: "read", command: "big.ts", filePath: "big.ts" } }),
+    entry({ id: "a10", text: "calling", tokens: 100, toolCalls: ["c10"], call: null }),
+    entry({ id: "t10", role: "toolResult", text: "huge failed output", tokens: 40000, toolResultFor: "c10", isError: true, call: { id: "c10", name: "bash", command: "npm test", filePath: "" } }),
+    ...rounds(3, 5000, 11),
     entry({ id: "a9", text: "done", tokens: 50 }),
   ]);
   const chunk = selectNewestChunk(entries, { engine: "local" });

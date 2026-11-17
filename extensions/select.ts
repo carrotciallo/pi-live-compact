@@ -38,6 +38,11 @@
 // checkpoint, a genuine user entry, an unbalanced tool pair, or a
 // trial card rejection stops it. 1.1.11: an ordinary pick whose card
 // is rejected retries once with the long-read candidate forced (#60).
+// 1.1.12: that fallback is generalised — both candidates are computed
+// once and evaluated in place, winner first, and every rejection exit
+// of the first candidate (pointer pairing/permission, span bound,
+// expansion exhaustion, failed-result pointer veto, card veto, final
+// pairing check) falls through to the other candidate (#60).
 
 import {
   buildCard,
@@ -303,60 +308,55 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
     return total;
   };
 
-  const attempt = (disableLongRead: boolean, forceLongRead = false): Chunk | null => {
-    const longSpan =
-      !disableLongRead && newestLong && visible[newestLong.start].index > floorCard
-        ? { start: visible[newestLong.start].index, end: visible[newestLong.end].index }
-        : null;
-    if (!longSpan && (maxEnd < first || isCheckpointEntry(entries[maxEnd]))) return null;
-    let usedLongCut = false;
-    // 1.1.9: the long-read candidate competes with the ordinary one;
-    // the larger token span wins (a tie goes to the ordinary pick).
-    let longPicked: CutPick | null = null;
-    if (longSpan) {
-      const candidate = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
-      if (candidate && candidate.start >= longSpan.start && candidate.end <= longSpan.end) {
-        longPicked = candidate;
-      }
+  // 1.1.12 (#60): both candidates are computed once and evaluated in
+  // place, winner first (the 1.1.9 competition). Every rejection exit
+  // of a candidate falls through to the other candidate instead of
+  // abandoning the pass. This subsumes the 1.1.7 retry (a failed
+  // long-read cut rescanned with long reads disabled) and the 1.1.11
+  // retry (a card-rejected ordinary pick forcing the long-read
+  // candidate): the other candidate is the same pick either way, now
+  // reached from every exit without rescanning.
+  let longPicked: CutPick | null = null;
+  if (longSpan) {
+    const candidate = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
+    if (candidate && candidate.start >= longSpan.start && candidate.end <= longSpan.end) {
+      longPicked = candidate;
     }
-    let ordinaryPicked: CutPick | null = null;
-    if (maxEnd >= first && !isCheckpointEntry(entries[maxEnd])) {
-      ordinaryPicked = selectCutIndexes(items, cutOptions);
+  }
+  let ordinaryPicked: CutPick | null = null;
+  if (maxEnd >= first && !isCheckpointEntry(entries[maxEnd])) {
+    ordinaryPicked = selectCutIndexes(items, cutOptions);
+  }
+  const candidates: { pick: CutPick; usedLongCut: boolean }[] = [];
+  const addCandidate = (pick: CutPick | null, usedLongCut: boolean) => {
+    if (pick && !candidates.some((item) => item.pick === pick)) candidates.push({ pick, usedLongCut });
+  };
+  if (longPicked && ordinaryPicked) {
+    if ((ordinaryPicked.tokens || 0) >= (longPicked.tokens || 0)) {
+      addCandidate(ordinaryPicked, false);
+      addCandidate(longPicked, true);
+    } else {
+      addCandidate(longPicked, true);
+      addCandidate(ordinaryPicked, false);
     }
-    let picked: CutPick | null = null;
-    if (forceLongRead && longPicked) {
-      picked = longPicked;
-      usedLongCut = true;
-    } else if (longPicked && ordinaryPicked) {
-      if ((ordinaryPicked.tokens || 0) >= (longPicked.tokens || 0)) {
-        picked = ordinaryPicked;
-      } else {
-        picked = longPicked;
-        usedLongCut = true;
-      }
-    } else if (ordinaryPicked) {
-      picked = ordinaryPicked;
-    } else if (longPicked) {
-      picked = longPicked;
-      usedLongCut = true;
-    }
-    if (!picked) return null;
-    // 1.1.7: a long-read cut that fails a later gate retries the whole
-    // selection with long reads disabled instead of returning nothing.
-    const fallback = (): Chunk | null => (usedLongCut ? attempt(true) : null);
+  } else {
+    addCandidate(ordinaryPicked, false);
+    addCandidate(longPicked, true);
+  }
 
+  const evaluate = (picked: CutPick, usedLongCut: boolean): Chunk | null => {
     if (picked.pointerOnly) {
       const resultAt = picked.end;
       // 1.1.5 (#33): an identified failed result never goes pointer-only;
       // its diagnostics must go through the card gate instead.
-      if (isToolFailure(entries[resultAt].text, entries[resultAt].isError)) return fallback();
+      if (isToolFailure(entries[resultAt].text, entries[resultAt].isError)) return null;
       const callId = entries[resultAt].toolResultFor;
-      if (!callId) return fallback();
+      if (!callId) return null;
       const pairStart = entries.findIndex((entry) => entry.toolCalls.includes(callId));
-      if (pairStart < 0 || pairStart > resultAt) return fallback();
-      if (usedLongCut && longSpan && pairStart < longSpan.start) return fallback();
-      if (!pointerSpanAllowed(items, pairStart, resultAt, engine)) return fallback();
-      if (items[pairStart].balancedBefore === false) return fallback();
+      if (pairStart < 0 || pairStart > resultAt) return null;
+      if (usedLongCut && longSpan && pairStart < longSpan.start) return null;
+      if (!pointerSpanAllowed(items, pairStart, resultAt, engine)) return null;
+      if (items[pairStart].balancedBefore === false) return null;
       // Port-side guard (PORTING.md): replacing the call entry also drops any
       // sibling call in it; a sibling whose result lands outside the span
       // would be orphaned, so refuse the cut in that case.
@@ -367,7 +367,7 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
       for (const sibling of entries[pairStart].toolCalls) {
         if (sibling === callId) continue;
         const at = resultIndex.get(sibling);
-        if (at === undefined || at > resultAt) return fallback();
+        if (at === undefined || at > resultAt) return null;
       }
       const text = `${MARK}\n${pointerOnlyText(spanObjs(pairStart, resultAt))}`;
       const card: Card = {
@@ -400,7 +400,7 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
       };
     }
 
-    if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallback();
+    if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;
 
     let start = picked.start;
     const finalEnd = picked.end;
@@ -426,17 +426,10 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
       expandedTokens -= entries[start].tokens;
       start += 1;
     }
-    if (start > finalEnd) return fallback();
+    if (start > finalEnd) return null;
     if (isCheckpointEntry(entries[start])) return null;
     const card = buildCard(spanText(start, finalEnd), liveText(start, finalEnd), spanObjs(start, finalEnd));
-    if (!card.ok) {
-      // 1.1.11 (#60): the ordinary candidate is chosen by token gain
-      // before card validation; if its card is rejected, give the
-      // already selected long-read candidate a complete second pass
-      // before abandoning the turn.
-      if (!usedLongCut && longPicked && !forceLongRead) return attempt(false, true);
-      return fallback();
-    }
+    if (!card.ok) return null;
     if (!balancedAfter(entries, start, finalEnd)) return null;
     return {
       start,
@@ -447,5 +440,9 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
       card,
     };
   };
-  return attempt(false);
+  for (const { pick, usedLongCut } of candidates) {
+    const chunk = evaluate(pick, usedLongCut);
+    if (chunk) return chunk;
+  }
+  return null;
 }

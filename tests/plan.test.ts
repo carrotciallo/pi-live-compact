@@ -696,3 +696,29 @@ test("tool block emits a hard fact once, in the prefix section only (1.1.11, iss
   assert.equal(excerpt.text.split("部署区域：eu-west-1").length - 1, 1);
   assert.ok(excerpt.text.includes("plain output line"));
 });
+
+// ---- 1.1.12 regression pins (upstream test/review-derived.test.mjs;
+// plan.js itself is unchanged in 1.1.12, these pin the 1.1.11 #61
+// dedup interaction with the 1.1.5 failure-diagnostics gate) ----
+test("tool failure diagnostics keep a long hard-fact report complete (1.1.12 pin)", () => {
+  const text = Array.from({ length: 30 }, (_, i) =>
+    `第${i + 1}行：必须在 us-east-1 部署并记录失败原因 ${"x".repeat(35)}`).join("\n");
+  const excerpt = toolExcerpt([{ role: "toolResult", text, isError: true, toolCallId: "fail-long", seq: 9, callSeq: 8, turn: 1, command: "deploy", name: "bash" }]);
+  assert.equal(excerpt.failureDiagnosticsComplete, true);
+  assert.equal(excerpt.text.split("第1行：").length - 1, 1);
+  assert.equal(excerpt.text.split("第30行：").length - 1, 1);
+});
+
+test("hard-fact failed diagnostics fit the budget without duplicate lines (1.1.12 pin, issue #61)", () => {
+  const text = Array.from({ length: 28 }, (_, i) =>
+    `Error: step-${i} 必须保留部署区域 cn-north-${i} 节点校验参数 config_key_${i}`).join("\n");
+  assert.ok(text.length > 1400 && text.length < 2100, `expected ~1800 chars, got ${text.length}`);
+  const span: CardSpan = { role: "toolResult", text, isError: true, toolCallId: "call-61", seq: 9, callSeq: 8, turn: 1, command: "deploy", name: "bash" };
+  const excerpt = toolExcerpt([span]);
+  assert.equal(excerpt.failureDiagnosticsComplete, true);
+  assert.deepEqual(excerpt.incompleteFailures, []);
+  assert.equal(excerpt.text.split("step-5 必须保留部署区域").length - 1, 1);
+  const card = buildCard(text, "", [span]);
+  assert.equal(card.ok, true);
+  assert.equal(card.failureDiagnosticsComplete, true);
+});
