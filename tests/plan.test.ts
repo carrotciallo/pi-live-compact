@@ -226,6 +226,13 @@ test("estimateTokens counts CJK denser than latin", () => {
   assert.equal(estimateTokens("你好世界"), 3);
 });
 
+test("estimateTokens counts kana and hangul at the CJK rate (1.1.13, issue #68)", () => {
+  // With the pre-#68 Han-only class these scored 2, 1 and 3.
+  assert.equal(estimateTokens("こんにちは"), 4);
+  assert.equal(estimateTokens("한국어"), 2);
+  assert.equal(estimateTokens("日本語テスト"), 4);
+});
+
 test("resolveEngine: env override beats everything (1.0.7)", () => {
   assert.deepEqual(resolveEngine({ provider: "x", baseURL: "https://api.example.com", env: { SPINE_ENGINE: "local" } }), { engine: "local", source: "env" });
   assert.deepEqual(resolveEngine({ provider: "x", baseURL: "http://127.0.0.1:1", env: { SPINE_ENGINE: "cloud" } }), { engine: "cloud", source: "env" });

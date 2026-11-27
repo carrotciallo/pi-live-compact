@@ -257,7 +257,8 @@ export function selectNewestChunk(entries: SpanEntry[], opts: SelectOptions = {}
     tokens: entry.tokens,
     // 1.1.8 classification, Pi mapping (PORTING.md #38): Pi has no
     // validated plugin-notice producer, so every user entry is an
-    // untrusted genuine boundary for the cloud fallback.
+    // untrusted genuine boundary for the cloud fallback. 1.1.13 (#69)
+    // does not change this mapping — see PORTING.md #43.
     untrustedNotice: entry.role === "user",
     checkpoint: isCheckpointEntry(entry),
     balancedBefore: balancedBefore(entries, index),

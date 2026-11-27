@@ -8,7 +8,7 @@ not after the window has filled up.
 This is a faithful port of
 [dsh-live-compact](https://github.com/MerkyorLynn/dsh-live-compact)
 (MerkyorLynn, MIT) to the Pi coding agent: the principles, thresholds and the
-card algorithm match upstream 1.1.12, and the host-mechanism differences are
+card algorithm match upstream 1.1.14, and the host-mechanism differences are
 listed one by one in [PORTING.md](./PORTING.md).
 
 Pi's built-in compaction works like DSH's stock behaviour: pile up to a
@@ -21,7 +21,7 @@ extractive card, and the cut only goes ahead when the card can prove that no
 hard line was lost. Spans whose prose share is too high are not cut and are
 left to Pi's built-in compaction — the same routing as upstream's wait-80.
 
-Semantics at 1.1.12 (synced with upstream):
+Semantics at 1.1.14 (synced with upstream):
 
 - **Two engine modes**, resolved from the endpoint: a `strata` provider, or a
   loopback / LAN / Tailscale-range address, counts as **local** (cuts as
@@ -73,6 +73,14 @@ Semantics at 1.1.12 (synced with upstream):
   other candidate. Hard tool
   facts appear only once, in the block's prefix section, and no longer
   count twice against the tool budget (#61).
+- **CJK estimator class** (1.1.13, #68): the dense-rate character class
+  in the token estimator now covers Han, Hangul, Hiragana and Katakana,
+  so kana and hangul are no longer undercounted at the Latin rate.
+  Upstream applied this only to its thunder path; in Pi the same class
+  is applied to the main estimator by user ruling (PORTING #44). The
+  1.1.13 injected-message boundary change (#69) is not ported — Pi
+  entries carry no source envelope, and every user message stays a hard
+  boundary (PORTING #43).
 - **The card coverage gate**: hard lines are attributed per source — hard
   facts from user messages and from tool results (obligation keywords, plan
   labels, deployment regions) must be retained under their own source id,
@@ -174,7 +182,7 @@ below 48K, and spans above 650K are out of the small cuts' scope
 ## Tests
 
 ```sh
-npm test   # node --test, 94 cases covering the card builder, engine resolution, span selection, the recall archive, cooldown and handler wiring (handler cases need a resolvable "typebox" in node_modules — link Pi's bundled copy on a Pi machine)
+npm test   # node --test, 98 cases covering the card builder, engine resolution, span selection, the recall archive, cooldown and handler wiring (handler cases need a resolvable "typebox" in node_modules — link Pi's bundled copy on a Pi machine)
 ```
 
 ## License and origin

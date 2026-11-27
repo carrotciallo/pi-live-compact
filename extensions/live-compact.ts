@@ -1,4 +1,4 @@
-// Live Compact for Pi — a faithful port of dsh-live-compact 1.1.11
+// Live Compact for Pi — a faithful port of dsh-live-compact 1.1.14
 // (MIT, MerkyorLynn) to Pi's extension boundary API.
 //
 // The DSH original hooks its host's compaction engine on agent idle and
@@ -45,6 +45,12 @@
 // long-read candidate compete with the ordinary one by span size.
 // 1.1.11 retries a card-rejected ordinary pick with the long-read
 // candidate forced (#60) and emits hard tool facts only once (#61).
+// 1.1.12 generalises that retry to every rejection exit (#60,
+// PORTING.md #42). 1.1.13/1.1.14 are host- and shadow-side only,
+// except two rulings: the #69 injected-boundary change is not ported
+// (Pi entries carry no source envelope, so every user entry stays a
+// hard boundary, PORTING.md #43), and the #68 CJK estimator class is
+// applied to plan.ts by user ruling (PORTING.md #44).
 //
 // No model is called for the cuts themselves, exactly like the original's
 // spine cuts. When the card gate refuses (prose-heavy span), nothing is cut

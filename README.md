@@ -5,7 +5,7 @@
 Live Compact 就是边做边压。活着的时候就压，不等窗口堆满。
 
 这是 [dsh-live-compact](https://github.com/MerkyorLynn/dsh-live-compact)（MerkyorLynn，MIT）
-到 Pi coding agent 的忠实移植：原理、阈值与卡片算法与原版 1.1.12 一致，
+到 Pi coding agent 的忠实移植：原理、阈值与卡片算法与原版 1.1.14 一致，
 宿主机制差异逐项记在 [PORTING.md](./PORTING.md)。
 
 Pi 自带 compaction 和 DSH 原版一样是「堆到阈值才调模型大压一次」。
@@ -14,7 +14,7 @@ Pi 自带 compaction 和 DSH 原版一样是「堆到阈值才调模型大压一
 被切段替换成一张抽取式卡片，且只有当卡片能证明「硬行一条没丢」时才下刀；
 散文占比太高的段不切，留给 Pi 自带 compaction，原理同原版的 wait-80 路由。
 
-当前语义（与上游 1.1.12 同步）：
+当前语义（与上游 1.1.14 同步）：
 
 - **双模式**：端点按地址判定——`strata` 服务商、loopback、局域网与 Tailscale
   段地址算**本地模式**（照旧积极切，切点只落在最后一条用户消息之后）；
@@ -47,6 +47,11 @@ Pi 自带 compaction 和 DSH 原版一样是「堆到阈值才调模型大压一
   就地评序，胜者在 pointer、范围、扩张、失败否决等任一出口被拒都
   回试另一候选；工具硬事实只在卡上前缀段出现一次，正文不再重复
   计预算（#61）；
+- **CJK 估算字符类**（1.1.13，#68）：token 估算的密排字符类扩为汉字＋
+  谚文＋平假名＋片假名，假名与谚文不再被按拉丁字符低估约一半；
+  上游只改了 thunder 路径，Pi 按用户裁决把同一字符类用在主估算器上
+  （PORTING #44）；1.1.13 的注入消息边界改动（#69）Pi 无来源标记、
+  不移植，每条用户消息仍是硬边界（PORTING #43）；
 - **卡片覆盖门**：硬行逐行溯源——用户消息的硬事实与工具结果里的硬事实
   （必须/禁止/口令/`方案 X`/部署区域等）必须按来源编号对上才算保留；
   助手正文里的决策形行（按决策动词判定）若会被切丢，整张卡作废不切；
@@ -122,7 +127,7 @@ pi -e /path/to/pi-live-compact/extensions/live-compact.ts
 ## 测试
 
 ```sh
-npm test   # node --test，卡片构建器、模式判定、选段逻辑、取回存档、冷却与处理器接线共 94 个用例（handler 用例需 node_modules 里能解析到 typebox，在 Pi 机器上链到 Pi 自带的那份即可）
+npm test   # node --test，卡片构建器、模式判定、选段逻辑、取回存档、冷却与处理器接线共 98 个用例（handler 用例需 node_modules 里能解析到 typebox，在 Pi 机器上链到 Pi 自带的那份即可）
 ```
 
 ## 许可与来源

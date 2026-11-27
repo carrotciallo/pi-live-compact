@@ -1,5 +1,5 @@
 // Card builder and cut planning ported from dsh-live-compact plan.js
-// (MIT, MerkyorLynn; synced through 1.1.11). Semantics follow the upstream
+// (MIT, MerkyorLynn; synced through 1.1.14). Semantics follow the upstream
 // file function by function; host plumbing is adapted to Pi in
 // select.ts / live-compact.ts. See PORTING.md.
 
@@ -19,8 +19,14 @@ const TOKEN = /`([^`]{2,80})`|\b([A-Z][A-Za-z0-9]+(?:[A-Z][a-z0-9]+)+)\b|\b([a-z
 const IDENT_VERB = /`[^`]{2,80}`[\s\S]{0,80}\b(?:move|place|clear|preserve|require|requires|keep)\b|\b(?:move|place|clear|preserve|require|requires|keep)\b[\s\S]{0,80}`[^`]{2,80}`/i;
 const ERROR_LINE = /^(?:Error:|Exception:|Traceback\b|FAILED\b|panic!)/;
 
+// The CJK class follows upstream's 1.1.13 thunder fix (issue #68):
+// Han, Hangul, Hiragana and Katakana count at the dense rate. Upstream
+// applied it only to thunder.js; the plan estimator takes the same class
+// in Pi by user ruling (2026-11-27, PORTING.md #44). Rates are unchanged.
+const CJK_CHARACTER = /[\p{Script=Han}\p{Script=Hangul}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}]/gu;
+
 export function estimateTokens(text: string): number {
-  const cjk = (text.match(/[一-鿿]/g) || []).length;
+  const cjk = (text.match(CJK_CHARACTER) || []).length;
   return Math.ceil(cjk / 1.5 + (text.length - cjk) / 4);
 }
 
